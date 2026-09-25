@@ -32,6 +32,8 @@ typedef struct {
 
 // ------------------
 
+volatile bool fireRequest = false;
+volatile bool gameOver = false;
 
 // ------------------
 //  LCD Screen Functions
@@ -139,6 +141,8 @@ Joystick pollJoystick() {
             joystick.y = UP;
         if (ch == 's')
             joystick.y = DOWN;
+	if (ch == 'f')
+	    fireRequest = true;
     }
 
     return joystick;
@@ -170,6 +174,44 @@ void moveEnemies(bool enemies[NUM_ROWS][NUM_COLS]) {
     }
 }
 
+void moveBullets(bool bullets[NUM_ROWS][NUM_COLS], bool enemies[NUM_ROWS][NUM_COLS]) {
+    bool tempBullets[NUM_ROWS][NUM_COLS] = {false};
+
+    for (int r = 0; r < NUM_ROWS; r++) {
+	for (int c=0; c < NUM_COLS; c++) {
+	    if (!bullets[r][c]) continue;
+	    
+	    int next = c + 1;
+	    if (next >= NUM_COLS) continue;
+
+	    if (enemies[r][next]) enemies[r][next] = false;
+	    else tempBullets[r][next] = true;
+	}
+    }
+
+    for (int r = 0; r < NUM_ROWS; r++) 
+	for (int c = 0; c < NUM_COLS; c++)
+	    bullets[r][c] = tempBullets[r][c];
+}
+
+void checkHits (bool bullets[NUM_ROWS][NUM_COLS], bool enemies[NUM_ROWS][NUM_COLS]) {
+    for (int r = 0; r < NUM_ROWS; r++)
+	for (int c = 0; c < NUM_COLS; c++) {
+	    if (bullets[r][c] && enemies[r][c]) {
+		bullets[r][c] = false;
+		enemies[r][c] = false;
+	    }
+	}
+}
+
+void checkGameOver (bool enemies[NUM_ROWS][NUM_COLS], Cell hero) {
+    if (enemies[hero.y][hero.x])
+	gameOver = true;
+    for (int r = 0; r < NUM_ROWS; r++)
+	if(enemies[r][0])
+		gameOver = true;
+}
+
 int main(void) {
     //----------------------
     // Initialization
@@ -189,6 +231,7 @@ int main(void) {
 
     //enemy grid
     bool enemies[NUM_ROWS][NUM_COLS] = {false};
+    bool bullets[NUM_ROWS][NUM_COLS] = {false};
 
     int enemyTimer = 0; //tracker for movement of enemies
 
@@ -208,6 +251,13 @@ int main(void) {
             hero.y++;
         }
 
+	// Fire
+	if(fireRequest) {
+	    fireRequest = false;
+	    bullets[hero.y][hero.x] = true;
+	}
+	moveBullets(bullets, enemies);
+
         enemyTimer++; //increment timer for enemy movement
 
         if (enemyTimer >= 6) {
@@ -219,6 +269,10 @@ int main(void) {
                 }
             }
         } 
+	checkHits(bullets, enemies);
+
+	checkGameOver(enemies, hero);
+
         //clear screen
         screen = initScreen();
 
@@ -228,17 +282,30 @@ int main(void) {
                 if (enemies[r][c]) {
                     screen.cells[r][c] = 'X';
                 }
+		if (bullets[r][c]) 
+		    screen.cells[r][c] = '-';
             }
         }
 
 
+
         screen.cells[hero.y][hero.x] = 'O';
 
+	if (gameOver) {
+	    char oMessage[] = "GAME OVER";
+	    int i = 0;
+	    for (int c = (NUM_COLS/2)-4; c <= (NUM_COLS/2)+4; c++) {
+		screen.cells[1][c] = oMessage[i];
+		i++;
+	    }	    
+	}
 
         printScreen(screen);
 
         fflush(stdout); // Flush - Make sure screen is displayed immediately
         usleep(250000); // 250ms delay
+
+	if (gameOver) break;
     }
 
     return EXIT_SUCCESS;
