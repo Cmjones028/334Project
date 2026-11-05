@@ -8,6 +8,12 @@
 
 #define NUM_ROWS 4
 #define NUM_COLS 20
+#define MAX_HEAT 6
+#define HEAT_PER_SHOT 2
+#define COOL_RATE 2
+#define JAM_TICKS 5
+#define MAX_COLLISIONS 3
+#define ENEMY_MOVE_TICKS 6
 
 // ------------------
 //  Type Definitions
@@ -19,6 +25,8 @@ typedef struct {
 typedef enum { NEUTRAL_X, LEFT, RIGHT } Joystick_X;
 
 typedef enum { NEUTRAL_Y, UP, DOWN } Joystick_Y;
+
+typedef enum { START, INIT, READY, OVERHEAT, JAM, GAMEOVER } States;
 
 typedef struct {
     Joystick_X x;
@@ -34,6 +42,15 @@ typedef struct {
 
 volatile bool fireRequest = false;
 volatile bool gameOver = false;
+Cell hero;
+bool enemies[NUM_ROWS][NUM_COLS];
+bool bullets[NUM_ROWS][NUM_COLS];
+int enemyTimer;
+Joystick joystick;
+int collisions;
+int heat;
+LcdScreen screen;
+int jamTicks;
 
 // ------------------
 //  LCD Screen Functions
@@ -204,12 +221,258 @@ void checkHits (bool bullets[NUM_ROWS][NUM_COLS], bool enemies[NUM_ROWS][NUM_COL
 	}
 }
 
+void checkCollision (bool enemies[NUM_ROWS][NUM_COLS], Cell hero) {
+    if (enemies[hero.y][hero.x]) {
+        enemies[hero.y][hero.x] = false;
+        jamTicks = JAM_TICKS;
+        collisions++;
+    }
+}
+
 void checkGameOver (bool enemies[NUM_ROWS][NUM_COLS], Cell hero) {
-    if (enemies[hero.y][hero.x])
-	gameOver = true;
-    for (int r = 0; r < NUM_ROWS; r++)
-	if(enemies[r][0])
-		gameOver = true;
+    if (collisions >= MAX_COLLISIONS)
+	    gameOver = true;
+    for (int r = 0; r < NUM_ROWS; r++) {
+	    if(enemies[r][0])
+		    gameOver = true;
+    }
+}
+
+void tickFunction () {
+    static States state = START;
+
+    // State Transitions
+    switch(state) {
+        case START:
+            state = INIT;
+            break;
+        case INIT:
+            state = READY;
+            break;
+        case READY:
+            if(gameOver) {
+                state = GAMEOVER;
+            } else if(jamTicks > 0) {
+                state = JAM;
+            } else if(heat >= MAX_HEAT) { 
+                state = OVERHEAT;
+            } else {
+                state = READY;
+            }
+            break;
+        case OVERHEAT:
+            if(gameOver) {
+                state = GAMEOVER;
+            } else if(jamTicks > 0) {
+                state = JAM;
+            } else if(heat <= 0) {
+                state = READY;
+            } else {
+                state = OVERHEAT;
+            }
+            break;
+        case JAM:
+            if(gameOver) {
+                state = GAMEOVER;
+            } else if(jamTicks == 0) {
+                state = READY;
+            } else {
+                state = JAM;
+            }
+            break;
+        case GAMEOVER:
+            if(fireRequest) {
+                state = INIT;
+            } else {
+                state = GAMEOVER;
+            }
+            break;
+    }
+
+    // State Actions
+    switch(state) {
+        case INIT:
+            // Keep track of the hero 'O' character
+            hero.x = 0;
+            hero.y = 0;
+
+            //enemy grid
+            for(int r = 0; r < NUM_ROWS; r++){
+                for(int c = 0; c < NUM_COLS; c++) {
+                    enemies[r][c] = false;
+                    bullets[r][c] = false;
+                }
+            }
+
+            enemyTimer = 0;
+            jamTicks = 0;
+            gameOver = false;
+            collisions = 0;
+            heat = 0;
+            fireRequest = false;
+
+            break;
+        case READY:
+            if (joystick.x == LEFT && hero.x > 0) {
+                hero.x--;
+            }
+            if (joystick.x == RIGHT && hero.x < NUM_COLS - 1) {
+                hero.x++;
+            }  
+            if (joystick.y == UP && hero.y > 0) {
+                hero.y--;
+            }
+            if (joystick.y == DOWN && hero.y < NUM_ROWS - 1) {
+                hero.y++;
+            }
+
+            if(fireRequest) {
+	            fireRequest = false;
+	            bullets[hero.y][hero.x] = true;
+                heat = heat + HEAT_PER_SHOT;
+	        }
+	        moveBullets(bullets, enemies);
+
+            enemyTimer++;
+            if (enemyTimer >= ENEMY_MOVE_TICKS) {
+                enemyTimer = 0;
+                moveEnemies(enemies);
+                for (int r = 0; r < NUM_ROWS; r++) {
+                    if (rand() % 2 == 0) {
+                        enemies[r][NUM_COLS - 1] = true;
+                    }
+                }
+            } 
+
+            checkHits(bullets, enemies);
+
+            checkCollision(enemies, hero);
+            checkGameOver(enemies, hero);
+
+            //clear screen
+            screen = initScreen();
+
+            //places the enemies on the real board
+            for (int r = 0; r < NUM_ROWS; r++) {
+                for (int c = 0; c < NUM_COLS; c++) {
+                    if (enemies[r][c]) 
+                        screen.cells[r][c] = 'X';
+    		        if (bullets[r][c]) 
+	    	            screen.cells[r][c] = '-';
+                }
+            }
+
+            heat -= (COOL_RATE/2);
+            if (heat < 0) heat = 0;
+            
+            screen.cells[hero.y][hero.x] = 'O';
+            break;
+        case OVERHEAT:
+            if (joystick.x == LEFT && hero.x > 0) {
+                hero.x--;
+            }
+            if (joystick.x == RIGHT && hero.x < NUM_COLS - 1) {
+                hero.x++;
+            }  
+            if (joystick.y == UP && hero.y > 0) {
+                hero.y--;
+            }
+            if (joystick.y == DOWN && hero.y < NUM_ROWS - 1) {
+                hero.y++;
+            }
+
+            moveBullets(bullets, enemies);
+
+            enemyTimer++;
+            if (enemyTimer >= ENEMY_MOVE_TICKS) {
+                enemyTimer = 0;
+                moveEnemies(enemies);
+                for (int r = 0; r < NUM_ROWS; r++) {
+                    if (rand() % 2 == 0) {
+                        enemies[r][NUM_COLS - 1] = true;
+                    }
+                }
+            } 
+
+            checkHits(bullets, enemies);
+            checkCollision(enemies, hero);
+            checkGameOver(enemies, hero);
+
+            //clear screen
+            screen = initScreen();
+
+            //places the enemies on the real board
+            for (int r = 0; r < NUM_ROWS; r++) {
+                for (int c = 0; c < NUM_COLS; c++) {
+                    if (enemies[r][c]) 
+                        screen.cells[r][c] = 'X';
+    		        if (bullets[r][c]) 
+	    	            screen.cells[r][c] = '-';
+                }
+            }
+
+            screen.cells[hero.y][hero.x] = 'O';
+            fireRequest = false;
+            heat -= COOL_RATE;
+            break;
+        case JAM:
+            if (joystick.x == LEFT && hero.x > 0) {
+                hero.x--;
+            }
+            if (joystick.x == RIGHT && hero.x < NUM_COLS - 1) {
+                hero.x++;
+            }  
+            if (joystick.y == UP && hero.y > 0) {
+                hero.y--;
+            }
+            if (joystick.y == DOWN && hero.y < NUM_ROWS - 1) {
+                hero.y++;
+            }
+
+            moveBullets(bullets, enemies);
+
+            enemyTimer++;
+            if (enemyTimer >= ENEMY_MOVE_TICKS) {
+                enemyTimer = 0;
+                moveEnemies(enemies);
+                for (int r = 0; r < NUM_ROWS; r++) {
+                    if (rand() % 2 == 0) {
+                        enemies[r][NUM_COLS - 1] = true;
+                    }
+                }
+            } 
+
+            checkHits(bullets, enemies);
+            checkCollision(enemies, hero);
+            checkGameOver(enemies, hero);
+
+            //clear screen
+            screen = initScreen();
+
+            //places the enemies on the real board
+            for (int r = 0; r < NUM_ROWS; r++) {
+                for (int c = 0; c < NUM_COLS; c++) {
+                    if (enemies[r][c]) 
+                        screen.cells[r][c] = 'X';
+    		        if (bullets[r][c]) 
+	    	            screen.cells[r][c] = '-';
+                }
+            }
+
+            fireRequest = false;
+            screen.cells[hero.y][hero.x] = 'O';
+            jamTicks--;
+            break;
+        case GAMEOVER: {
+            char oMessage[] = "GAME OVER";
+	        int i = 0;
+	        for (int c = (NUM_COLS/2)-4; c <= (NUM_COLS/2)+4; c++) {
+		        screen.cells[1][c] = oMessage[i];
+		        i++;
+	        }	 
+            break;
+        }
+    }
 }
 
 int main(void) {
@@ -220,92 +483,15 @@ int main(void) {
 
     srand(time(NULL));
 
-    LcdScreen screen = initScreen();
+    screen = initScreen();
     //----------------------
 
-    // Keep track of the hero 'O' character
-    Cell hero;
-    hero.x = 0;
-    hero.y = 0;
-
-
-    //enemy grid
-    bool enemies[NUM_ROWS][NUM_COLS] = {false};
-    bool bullets[NUM_ROWS][NUM_COLS] = {false};
-
-    int enemyTimer = 0; //tracker for movement of enemies
-
-    // Loop Forever
     while (1) {
-        Joystick joystick = pollJoystick();
-        if (joystick.x == LEFT && hero.x > 0) {
-            hero.x--;
-        }
-        if (joystick.x == RIGHT && hero.x < NUM_COLS - 1) {
-            hero.x++;
-        }
-        if (joystick.y == UP && hero.y > 0) {
-            hero.y--;
-        }
-        if (joystick.y == DOWN && hero.y < NUM_ROWS - 1) {
-            hero.y++;
-        }
-
-	// Fire
-	if(fireRequest) {
-	    fireRequest = false;
-	    bullets[hero.y][hero.x] = true;
-	}
-	moveBullets(bullets, enemies);
-
-        enemyTimer++; //increment timer for enemy movement
-
-        if (enemyTimer >= 6) {
-            enemyTimer = 0;
-            moveEnemies(enemies);
-            for (int r = 0; r < NUM_ROWS; r++) {
-                if (rand() % 2 == 0) {
-                    enemies[r][NUM_COLS - 1] = true;
-                }
-            }
-        } 
-	checkHits(bullets, enemies);
-
-	checkGameOver(enemies, hero);
-
-        //clear screen
-        screen = initScreen();
-
-        //places the enemies on the real board
-        for (int r = 0; r < NUM_ROWS; r++) {
-            for (int c = 0; c < NUM_COLS; c++) {
-                if (enemies[r][c]) {
-                    screen.cells[r][c] = 'X';
-                }
-		if (bullets[r][c]) 
-		    screen.cells[r][c] = '-';
-            }
-        }
-
-
-
-        screen.cells[hero.y][hero.x] = 'O';
-
-	if (gameOver) {
-	    char oMessage[] = "GAME OVER";
-	    int i = 0;
-	    for (int c = (NUM_COLS/2)-4; c <= (NUM_COLS/2)+4; c++) {
-		screen.cells[1][c] = oMessage[i];
-		i++;
-	    }	    
-	}
-
+        joystick = pollJoystick();
+        tickFunction();
         printScreen(screen);
-
-        fflush(stdout); // Flush - Make sure screen is displayed immediately
-        usleep(250000); // 250ms delay
-
-	if (gameOver) break;
+        fflush(stdout);
+        usleep(250000);
     }
 
     return EXIT_SUCCESS;
